@@ -4,13 +4,77 @@ use Exporter;
 use IO::File;
 use Symbol;   # Would like to use IO::Dir, but that isn't available in 5.004_04
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS);
-$VERSION = '0.03';
+$VERSION = "0.04";
 @ISA = qw(Exporter);
-@EXPORT_OK = qw(inst_to_dev dev_to_inst get_inst_names get_dev_names);
+@EXPORT_OK = qw(inst_to_dev dev_to_inst get_inst_names get_dev_names
+                mapdev_data_files mapdev_system_files);
 %EXPORT_TAGS = ( ALL => [ @EXPORT_OK ] );
 
-# Maps of instance to /dev name and vice versa
-use vars qw($inst_to_dev $dev_to_inst);
+# Global flags and data structures
+#    $use_system_files - Live system data files used for mapping info
+#    $device_to_inst   - /devices entry -> instance name
+#    $inst_to_dev      - instance name  -> /dev entry
+#    $dev_to_inst      - /dev entry     -> instance name
+use vars qw($use_system_files $device_to_inst $inst_to_dev $dev_to_inst);
+$use_system_files = 1;   # default - use live system files
+
+################################################################################
+# Read /etc/path_to_inst, and build a map from disk and tape /devices entries
+# to instance names
+
+sub read_path_to_inst($)
+{
+my ($path_to_inst) = @_;
+
+my $fh = IO::File->new($path_to_inst, "r")
+   || die("Can't open $path_to_inst: $!\n");
+while (defined(my $line = $fh->getline()))
+   {
+   next if ($line =~ /^\s*#/);
+   $line =~ s/"//g;
+   my ($dev, $inst, $drv) = split(" ", $line);
+   if ($drv =~ /^(ss?d|st)$/)
+      {
+      $device_to_inst->{"/devices$dev"} = "$drv$inst";
+      }
+   elsif ($drv eq "fd")
+      {
+      $inst_to_dev->{"$drv$inst"} = "$drv$inst";
+      }
+   elsif ($drv eq "cmdk")
+      {
+      $device_to_inst->{"/devices$dev"} = "sd$inst";
+      }
+   elsif ($drv eq "dad")
+      {
+      $device_to_inst->{"/devices$dev"} = "dad$inst";
+      }
+   elsif ($drv eq "atapicd")
+      {
+      $device_to_inst->{"/devices$dev"} = "atapicd$inst";
+      }
+   }
+$fh->close();
+}
+
+################################################################################
+# Read in /etc/mnttab and add entries for nfs mount points
+
+sub read_mnttab($)
+{
+my ($mnttab) = @_;
+
+my $fh = IO::File->new($mnttab, "r") || die("Can't open $mnttab: $!\n");
+while (defined(my $line = $fh->getline()))
+   {
+   next if ($line =~ /^\s*#/);
+   my ($special, $fstyp, $opt) = (split(" ", $line))[0,2,3];
+   next if ($fstyp ne "nfs");
+   $opt =~ s/.*dev=(\w+).*/hex($1) & 0x3ffff/e;
+   $inst_to_dev->{"nfs$opt"} = $special;
+   }
+$fh->close();
+}
 
 ################################################################################
 # Private routine to rebuild the inst_to_dev lookup table.  This is called the
@@ -19,44 +83,16 @@ use vars qw($inst_to_dev $dev_to_inst);
 # assumption that we will rarely want to map back from a device to the instance.
 # $dev_to_inst is rebuilt when required by dev_to_inst
 
-sub _refresh()
+sub refresh()
 {
-$inst_to_dev = {};
-$dev_to_inst = {};
+# Throw away all the current info
+$device_to_inst = {};
+$inst_to_dev    = {};
+$dev_to_inst    = {};
 
-# Read /etc/path_to_inst, and build a map from disk and tape /devices entries
-# to instance names
-my ($fh, $dh, $dir, $line, $dev, $inst, $lnk, %device_to_inst);
-$fh = IO::File->new("/etc/path_to_inst", "r") || die;
-$dh = gensym;
-while (defined($line = $fh->getline()))
-   {
-   next if ($line =~ /^\s*#/);
-   $line =~ s/"//g;
-   my $drv;
-   ($dev, $inst, $drv) = split(' ', $line);
-   if ($drv =~ /^(ss?d|st)$/)
-      {
-      $device_to_inst{"/devices$dev"} = "$drv$inst";
-      }
-   elsif ($drv eq "fd")
-      {
-      $inst_to_dev->{"$drv$inst"} = "$drv$inst";
-      }
-   elsif ($drv eq "cmdk")
-      {
-      $device_to_inst{"/devices$dev"} = "sd$inst";
-      }
-   elsif ($drv eq "dad")
-      {
-      $device_to_inst{"/devices$dev"} = "dad$inst";
-      }
-   elsif ($drv eq "atapicd")
-      {
-      $device_to_inst{"/devices$dev"} = "atapicd$inst";
-      }
-   }
-$fh->close();
+# Read /etc/path_to_inst and /etc/mnttab
+read_path_to_inst("/etc/path_to_inst");
+read_mnttab("/etc/mnttab");
 
 # Next find all the disk nodes under /dev and /dev/osa if it exists.
 # /dev/osa contains extra device nodes not found under /dev for the Symbios
@@ -65,52 +101,110 @@ $fh->close();
 # non-Symbios disks are added it will become incorrect.  To get around this, we
 # read /dev/osa first if it exists, then /dev.  This will make sure that we get
 # the most up-to-date information.
-foreach $dir ('/dev/osa/rdsk', '/dev/osa/dev/rdsk', '/dev/rdsk')
+# Also do the same for all the tape devices under /dev/rmt
+my ($dir, $dh, $dev, $lnk);
+$dh = gensym();
+foreach $dir ("/dev/osa/rdsk", "/dev/osa/dev/rdsk", "/dev/rdsk", "/dev/rmt")
    {
    next if (! -d $dir);
    opendir($dh, $dir) || die("Cannot read $dir: $!\n");
    while (defined($dev = readdir($dh)))
       {
-      next if ($dev !~ /s0$/);
+      next if ($dev !~ /s0$/ && $dev !~ /^\d+$/);
       $lnk = readlink("$dir/$dev");
-      $lnk =~ s/^\.\.\/\.\.//;
-      $lnk =~ s/:.*$//;
-      if (defined($device_to_inst{$lnk}))
+      $lnk =~ s!^\.\./\.\.!!;
+      $lnk =~ s!:.*$!!;
+      if (defined($device_to_inst->{$lnk}))
          {
-         $dev =~ s/s0$//;
-         $inst_to_dev->{$device_to_inst{$lnk}} = $dev;
+         if ($dev =~ /s0$/) { $dev =~ s/s0$//; }
+         else { $dev = "rmt/$dev" };
+         $inst_to_dev->{$device_to_inst->{$lnk}} = $dev;
          }
       }
    closedir($dh);
    }
+}
 
-# Now we do the same for all the tape devices under /dev/rmt
-$dir = '/dev/rmt';
-opendir($dh, $dir) || die("Cannot read $dir: $!\n");
-while (defined($dev = readdir($dh)))
+################################################################################
+# Use supplied data files as the source of mapping information, instead of the
+# current live files.  For details on what's going on, look at refresh
+
+sub mapdev_data_files(%)
+{
+my %arg = @_;
+my $path_to_inst = $arg{path_to_inst}
+   || die("No path_to_inst file specified\n");
+my $dev_ls = $arg{dev_ls}
+   || die("No \"ls -l /dev/...\" files specified\n");
+my $mnttab = $arg{mnttab};
+$use_system_files = 0;
+
+# Throw away all the current info
+$device_to_inst = {};
+$inst_to_dev    = {};
+$dev_to_inst    = {};
+
+# Scan the path_to_inst and mnttab files
+read_path_to_inst($path_to_inst);
+read_mnttab($mnttab) if ($mnttab);
+
+my ($dir, $prefix, $dls, $fh, $line, $path, $dev_d, $dev_f, $lnk);
+foreach $dir ("/dev/osa/rdsk", "/dev/osa/dev/rdsk", "/dev/rdsk", "/dev/rmt")
    {
-   next if ($dev !~ /^\d+$/);
-   $lnk = readlink("$dir/$dev");
-   $lnk =~ s/^\.\.\/\.\.//;
-   $lnk =~ s/:.*$//;
-   if (defined($device_to_inst{$lnk}))
+   while (($prefix, $dls) = each(%$dev_ls))
       {
-      $inst_to_dev->{$device_to_inst{"$lnk"}} = "rmt/$dev";
+      $fh = IO::File->new($dls, "r") || die("Can't open $dls: $!\n");
+      $path = $prefix;
+      while (defined($line = $fh->getline()))
+         {
+         # Look for ls -l directory headings
+         if ($line =~ /^(?:\.\/)?([\w|\/]+):$/)
+            { $path = "$prefix/$1"; }
+         # Look for lines that are symlinks to ../../devices
+         elsif ($line =~ m!(\S+)\s+->\s+(\.\./\.\./devices\S+)!)
+            {
+            # Add on the directory prefix if the entry is relative,
+            # and remove any "/./" and "dir/../" components
+            ($dev_d, $lnk) = ($1, $2);
+            $dev_d = "$prefix/$dev_d" if (substr($dev_d, 0, 1) ne "/");
+            $dev_d =~ s!/\./!/!g;
+            $dev_d =~ s![^/]+/\.\./!!g while ($dev_d =~ /\.\./);
+
+            # Split device path into directory and filename
+            ($dev_d, $dev_f) = $dev_d =~ /^(.*)\/(.*)$/;
+
+            # Only process if this is a dir and dev we are interested in
+            next if (! ($dev_d eq $dir && $dev_f =~ /^\d+|c\d+t\d+d\d+s0/));
+
+            # Clean up the /device entry
+            $lnk =~ s!^\.\./\.\.!!;
+            $lnk =~ s!:.*$!!;
+
+            # Record the mapping if it is one we are interested in
+            if (defined($device_to_inst->{$lnk}))
+               {
+               # Tweak the dev name
+               if ($dev_f =~ /s0$/) { $dev_f =~ s/s0$//; }
+               else { $dev_f = "rmt/$dev_f" };
+               $inst_to_dev->{$device_to_inst->{$lnk}} = $dev_f;
+               }
+            }
+         }
+      $fh->close();
       }
    }
-closedir($dh);
+}
 
-# Now read in /etc/mnttab and add entries for nfs mount points
-$fh = IO::File->new("/etc/mnttab", "r") || die;
-while (defined($line = $fh->getline()))
-   {
-   next if ($line =~ /^\s*#/);
-   my ($special, $fstyp, $opt) = (split(' ', $line))[0,2,3];
-   next if ($fstyp ne "nfs");
-   $opt =~ s/.*dev=(\w+).*/hex($1) & 0x3ffff/e;
-   $inst_to_dev->{"nfs$opt"} = $special;
-   }
-$fh->close();
+################################################################################
+# Switch back to using live system files
+
+sub mapdev_system_files()
+{
+# Change flag & throw away all the current info
+$use_system_files = 1;
+$device_to_inst = undef;
+$inst_to_dev    = undef;
+$dev_to_inst    = undef;
 }
 
 ################################################################################
@@ -124,14 +218,14 @@ my ($i, $s);
 if ($inst =~ /^(ss?d\d+)(?:,(\w))$/ || $inst =~ /^(dad)(?:,(\w))$/)
    {
    $i = $1;
-   $s = "s" . (ord($2) - ord('a'));
+   $s = "s" . (ord($2) - ord("a"));
    }
 else
    {
    $i = $inst;
    $s = "";
    }
-_refresh() if (! exists($inst_to_dev->{$i}));
+refresh() if ($use_system_files && ! exists($inst_to_dev->{$i}));
 if (exists($inst_to_dev->{$i})) { return("$inst_to_dev->{$i}$s"); }
 else { return(undef); }
 }
@@ -147,7 +241,7 @@ my ($d, $s);
 if ($dev =~ /^(c\d+t\d+d\d+)(?:s(\d))$/)
    {
    $d = $1;
-   $s = "," . chr(ord('a') + $2);
+   $s = "," . chr(ord("a") + $2);
    }
 else
    {
@@ -156,7 +250,7 @@ else
    }
 if (! defined($inst_to_dev) || ! exists($dev_to_inst->{$d}))
    {
-   _refresh();
+   refresh() if ($use_system_files);
    %$dev_to_inst = reverse(%$inst_to_dev);
    }
 if (exists($dev_to_inst->{$d})) { return("$dev_to_inst->{$d}$s"); }
@@ -168,7 +262,7 @@ else { return(undef); }
 
 sub get_inst_names()
 {
-_refresh() if (! defined($inst_to_dev));
+refresh() if ($use_system_files && ! defined($inst_to_dev));
 return(sort(keys(%$inst_to_dev)));
 }
 
@@ -177,7 +271,7 @@ return(sort(keys(%$inst_to_dev)));
 
 sub get_dev_names()
 {
-_refresh() if (! defined($inst_to_dev));
+refresh() if ($use_system_files && ! defined($inst_to_dev));
 return(sort(values(%$inst_to_dev)));
 }
 
@@ -191,11 +285,15 @@ Solaris::MapDev - map between instance numbers and device names
 
 =head1 SYNOPSIS
 
-   use Solaris::MapDev qw(inst_to_dev dev_to_inst inst_dev_display);
+   use Solaris::MapDev qw(inst_to_dev dev_to_inst);
    my $disk = inst_to_dev("sd0");
-   my $tape = inst_to_dev("st1");
    my $nfs = inst_to_dev("nfs123");
    my $inst = dev_to_inst("c0t0d0s0");
+   mapdev_data_files(path_to_inst => "/copy/of/a/path_to_inst",
+                     mnttab => "/copy/of/a/mnttab",
+                     dev_ls => { "/dev/rdsk" => "ls-lR/of/dev_dsk",
+                                 "/dev/rmt"  => "ls-lR/of/dev_rmt" });
+   my $tape = inst_to_dev("st1");
 
 =head1 DESCRIPTION
 
@@ -220,6 +318,33 @@ Return a sorted list of all the instance names
 =head2 get_dev_names
 
 Return a sorted list of all the device names
+
+=head2 mapdev_data_files
+
+This tells mapdev to use data held in copies of the real datafiles, rather than
+the current "live" files on the system.  This is useful for example when
+examining explorer output.  A list of key-value pairs is expected as the
+arguments.  Valid keys-value pairs are:
+
+   path_to_inst => "/copy/of/a/path_to_inst",
+      A valid path_to_inst file.  This is mandatory.
+
+   mnttab => "/copy/of/a/mnttab",
+      A valid /etc/mnttab file.  This is optional - if not
+      specified, no information on NFS devices will be displayed.
+
+   dev_ls => { "/dir/path" => "/ls-lR/of/dir/path",
+               ... });
+      A hash containing path/datafile pairs.  The paths should
+      be one of /dev/rdsk, /dev/osa/rdsk, /dev/osa/dev/rdsk or
+      /dev/rmt.  The datafiles should be the output of a "ls -l"
+      of the specified directory.  A single file containing a
+      recursive "ls -Rl" of /dev is also acceptable.
+
+=head2 mapdev_system_files
+
+This tells mapdev to revert to using the current "live" datafiles on the system
+- see L<"mapdev_data_files()">
 
 =head1 AUTHOR
 

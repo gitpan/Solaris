@@ -29,7 +29,7 @@ my $ks = Solaris::Kstat->new();
 
 # Save initial stats values
 print("iost+ started on ", strftime("%d/%m/%Y %T", localtime()),
-      " on ", (uname())[1], "\n\n");
+      " on ", (uname())[1], ", sample interval $interval seconds\n\n");
 foreach $mod (@modules)
    {
    $kstats = $ks->{$mod};

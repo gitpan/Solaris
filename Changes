@@ -15,3 +15,7 @@ Fixed some significant bugs
 Version 0.03 beta, Wed Nov 25 1998
 ----------------------------------
 Fixed kstat chain update bug
+
+Version 0.04 beta, Thu Jan 21 1999
+----------------------------------
+Added support for explorer
