@@ -2,7 +2,7 @@ package Solaris::Kstat;
 use strict;
 use DynaLoader;
 use vars qw($VERSION @ISA);
-$VERSION = '0.01';
+$VERSION = '0.02';
 @ISA = qw(DynaLoader);
 bootstrap Solaris::Kstat $VERSION;
 1;

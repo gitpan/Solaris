@@ -11,3 +11,7 @@ Added show_devs script
 Modified output format of iost+ script
 Improved test harness
 Fixed some significant bugs
+
+Version 0.03 beta, Wed Nov 25 1998
+----------------------------------
+Fixed kstat chain update bug

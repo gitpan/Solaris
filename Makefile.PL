@@ -10,7 +10,7 @@ if ($sys ne "SunOS" || $rel !~ /^(5.5.1|5.6|5.7)$/)
 
 WriteMakefile(
    NAME         => 'Solaris',
-   VERSION      => '0.02',
+   VERSION      => '0.03',
    DIR          => [ 'Kstat', 'MapDev' ],
    EXE_FILES    => [ 'scripts/dump_kstat', 'scripts/iost+',
                      'scripts/mapdev', 'scripts/show_devs' ], 

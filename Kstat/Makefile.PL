@@ -11,7 +11,7 @@ if ($sys ne "SunOS" || $rel !~ /^(5.5.1|5.6|5.7)$/)
 
 # 5.004_04 has a hv_delete that's broken
 my $def;
-if ($] < 5.00405 )
+if ($] < 5.00405)
    {
    print << "EOF";
 ERROR: Your version of perl ($]) has a number of bugs that prevent this

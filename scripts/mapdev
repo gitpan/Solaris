@@ -47,7 +47,7 @@ if (@ARGV == 0)
       $| = 1;
       while (<STDIN>)
          {
-         s/((ss?d\d+(,\w)?|nfs\d+|st\d+)\s*)/i2d($1)/ge;
+         s/((ss?d\d+(,\w)?|nfs\d+|st\d+|dad\d+|atapicd\d+)\s*)/i2d($1)/ge;
          print;
          }
       }
@@ -63,7 +63,7 @@ else
    {
    foreach my $arg (@ARGV)
       {
-      if ($arg =~ /^(ss?d\d+|st\d+|nfs\d+)/)
+      if ($arg =~ /^(ss?d\d+|st\d+|nfs\d+|dad\d+|atapicd\d+)/)
          { print(inst_to_dev($arg) || $arg); }
       else
          { print(dev_to_inst($arg) || $arg); }

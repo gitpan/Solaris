@@ -438,7 +438,8 @@ for (n = kp->ks_ndata, knp = KSTAT_NAMED_PTR(kp); n > 0; n--, knp++)
          break;
 #endif
       default:
-         croak("kstat_read: invalid data type");
+         croak("kstat_read: invalid data type %d for %s",
+               knp->data_type, knp->name);
          break;
       }
    hv_store(self, knp->name, strlen(knp->name), value, 0);
@@ -542,7 +543,9 @@ switch (kip->kstat->ks_type)
       save_timer(self, kip->kstat);
       break;
    default:
-      croak("kstat_read: illegal kstat type");
+      croak("kstat_read: illegal kstat type %d for %s.%d.%s",
+            kip->kstat->ks_type, kip->kstat->ks_module,
+            kip->kstat->ks_instance, kip->kstat->ks_name);
       break;
    }
 
@@ -620,7 +623,7 @@ CODE:
       SvREFCNT_dec(kstatsv);
       }
    SvREADONLY_on(SvRV(RETVAL));
-   SvREADONLY_on(RETVAL);
+   /* SvREADONLY_on(RETVAL); */
 OUTPUT:
    RETVAL
 
@@ -658,7 +661,7 @@ CODE:
       KstatInfo_t kstatinfo;
 
       /* Step 1: set the 'invalid' flag on each entry */
-      /* apply_to_ties(self, &set_valid, (void*)FALSE); */
+      apply_to_ties(self, &set_valid, (void*)FALSE);
 
       /* Step 2: Set the 'valid' flag on all entries in the kstat list */
       kstatinfo.read      = FALSE;

@@ -5,8 +5,9 @@ use Solaris::Kstat;
 use Solaris::MapDev qw(:ALL);
 
 my $ks = Solaris::Kstat->new();
-my %mod_to_name = (sd => "Disk", ssd => "Disk", st => "Tape", fd => "Floppy");
-foreach my $mod (qw(sd ssd st fd))
+my %mod_to_name = (sd => "Disk", ssd => "Disk", # broken kstats! dad => "Disk",
+                   atapicd => "Disk", st => "Tape", fd => "Floppy");
+foreach my $mod (qw(sd ssd dad atapicd st fd))
    {
    my $err = "${mod}err";
    foreach my $i (sort(keys(%{$ks->{$err}})))

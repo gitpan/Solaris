@@ -3,7 +3,7 @@
 use strict;
 use Solaris::MapDev qw(inst_to_dev);
 use Solaris::Kstat;
-use POSIX qw(strftime);
+use POSIX qw(uname strftime);
 
 ################################################################################
 
@@ -15,15 +15,21 @@ return(sprintf("%*.*f ", $width, $prec, $val));
 }
 
 ################################################################################
+# Main
 
 my ($interval, $count) = @ARGV;
 $interval = 5 if (! defined($interval) || $interval < 1);
 $count = -1 if (! $count);
-my @modules = qw(sd ssd nfs st fd);
+
+$SIG{INT} = $SIG{QUIT} = $SIG{HUP} = sub { $count = 0; };
+
+my @modules = qw(sd ssd nfs dad atapicd st fd);
 my ($mod, $inst, $kstats, $modinst, $dev, $then, $now, %stats, %totals, $io);
 my $ks = Solaris::Kstat->new();
 
 # Save initial stats values
+print("iost+ started on ", strftime("%d/%m/%Y %T", localtime()),
+      " on ", (uname())[1], "\n\n");
 foreach $mod (@modules)
    {
    $kstats = $ks->{$mod};
@@ -31,7 +37,7 @@ foreach $mod (@modules)
       {
       $modinst = "$mod$inst";
       next if (! exists($kstats->{$inst}{$modinst}));
-      $dev = inst_to_dev($modinst);
+      $dev = inst_to_dev($modinst) || $modinst;
       %{$then->{$dev}} = %{$kstats->{$inst}{$modinst}};
       }
    }
@@ -52,7 +58,7 @@ while ($count == -1 || $count-- > 0)
          {
          $modinst = "$mod$inst";
          next if (! exists($kstats->{$inst}{$modinst}));
-         $dev = inst_to_dev($modinst);
+         $dev = inst_to_dev($modinst) || $modinst;
          %{$now->{$dev}} = %{$kstats->{$inst}{$modinst}};
          }
       }
@@ -73,15 +79,17 @@ while ($count == -1 || $count-- > 0)
       my $delta = $n->{snaptime} - $t->{snaptime};
       my $deltaw = $n->{wlastupdate} - $t->{wlastupdate};
       my $deltar = $n->{rlastupdate} - $t->{rlastupdate};
-      my $reads = ($n->{reads} - $t->{reads}) / $deltar;
-      my $writes = ($n->{writes} - $t->{writes}) / $deltaw;
+      my $reads = $deltar ? ($n->{reads} - $t->{reads}) / $deltar : 0;
+      my $writes = $deltaw ? ($n->{writes} - $t->{writes}) / $deltaw : 0;
       my $rw = $reads + $writes;
-      my $kreads = ($n->{nread} - $t->{nread}) / 1024 / $deltar;
-      my $kwrites = ($n->{nwritten} - $t->{nwritten}) / 1204 / $deltaw;
 
       # Skip unless some I/O has actually taken place
       next if ($rw == 0);
       
+      # Calculate a few more stats
+      my $kreads = ($n->{nread} - $t->{nread}) / 1024 / $deltar;
+      my $kwrites = ($n->{nwritten} - $t->{nwritten}) / 1204 / $deltaw;
+
       # Store the individual stats
       $stats{$dev} = {};
       my $st = $stats{$dev};
@@ -142,6 +150,8 @@ while ($count == -1 || $count-- > 0)
    $then = $now;
    $now = {};
    }
+print("iost+ finished at ", strftime("%d/%m/%Y %T", localtime()),
+      " on ", (uname())[1], "\n\n");
 
 ################################################################################
 __END__
@@ -180,6 +190,8 @@ The number of samples to display
 =head1 EXAMPLES
 
  $ iost+ 5 3
+ iost+ started on 19/11/1998 15:51:30 1998 on fubar
+
  15:51:35 --throughput-- -----wait queue----- ----active queue----
   r/s  w/s   Kr/s   Kw/s qlen res_t svc_t %ut qlen res_t svc_t %ut device
    49    0     38      0  0.0   0.0   0.0   0  0.9  18.6  18.5  90 nfssvr:/fs1
@@ -212,6 +224,7 @@ The number of samples to display
    53    0     51      0                                           TOTAL NFS
    11    0    111      0                                           TOTAL TAPE
  
+ iost+ finished at 19/11/1998 15:51:45 1998 on fubar
  $ 
 
 Note that statistics for devices are only displayed when there is some activity

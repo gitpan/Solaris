@@ -4,7 +4,7 @@ use Exporter;
 use IO::File;
 use Symbol;   # Would like to use IO::Dir, but that isn't available in 5.004_04
 use vars qw($VERSION @ISA @EXPORT_OK %EXPORT_TAGS);
-$VERSION = '0.02';
+$VERSION = '0.03';
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(inst_to_dev dev_to_inst get_inst_names get_dev_names);
 %EXPORT_TAGS = ( ALL => [ @EXPORT_OK ] );
@@ -46,6 +46,14 @@ while (defined($line = $fh->getline()))
    elsif ($drv eq "cmdk")
       {
       $device_to_inst{"/devices$dev"} = "sd$inst";
+      }
+   elsif ($drv eq "dad")
+      {
+      $device_to_inst{"/devices$dev"} = "dad$inst";
+      }
+   elsif ($drv eq "atapicd")
+      {
+      $device_to_inst{"/devices$dev"} = "atapicd$inst";
       }
    }
 $fh->close();
@@ -113,7 +121,7 @@ sub inst_to_dev($)
 my ($inst) = @_;
 my ($i, $s);
 # Special treatment for disks with slice info
-if ($inst =~ /^(ss?d\d+)(?:,(\w))$/)
+if ($inst =~ /^(ss?d\d+)(?:,(\w))$/ || $inst =~ /^(dad)(?:,(\w))$/)
    {
    $i = $1;
    $s = "s" . (ord($2) - ord('a'));
